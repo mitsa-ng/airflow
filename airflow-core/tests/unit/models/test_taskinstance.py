@@ -3361,7 +3361,12 @@ class TestTaskInstance:
         for attempt_id in (CURRENT_ID, HISTORY_ID):
             XComModel.set_for_attempt(task_instance_id=attempt_id, key="owned", value=1, session=session)
             RenderedTaskInstanceFields.set_for_attempt(
-                task_instance_id=attempt_id, rendered_fields={"owned": 1}, session=session
+                task_instance_id=attempt_id,
+                dag_id=COORDINATES["dag_id"],
+                task_id=COORDINATES["task_id"],
+                run_id=COORDINATES["run_id"],
+                rendered_fields={"owned": 1},
+                session=session,
             )
         session.commit()
 
@@ -3544,7 +3549,12 @@ class TestTaskInstance:
         for attempt in (archived, current):
             XComModel.set_for_attempt(task_instance_id=attempt.id, key="deletion", value=1, session=session)
             RenderedTaskInstanceFields.set_for_attempt(
-                task_instance_id=attempt.id, rendered_fields={"owner": str(attempt.id)}, session=session
+                task_instance_id=attempt.id,
+                dag_id=COORDINATES["dag_id"],
+                task_id=COORDINATES["task_id"],
+                run_id=COORDINATES["run_id"],
+                rendered_fields={"owner": str(attempt.id)},
+                session=session,
             )
         session.flush()
 

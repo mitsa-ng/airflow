@@ -28,6 +28,7 @@ import sqlalchemy as sa
 import uuid6
 from sqlalchemy import (
     ForeignKeyConstraint,
+    Index,
     Integer,
     PrimaryKeyConstraint,
     UniqueConstraint,
@@ -146,6 +147,12 @@ class RenderedTaskInstanceFields(Base):
     __tablename__ = "rtif_v2"
     id: Mapped[UUID] = mapped_column(sa.Uuid(), primary_key=True, default=uuid6.uuid7)
     task_instance_id: Mapped[UUID] = mapped_column(sa.Uuid(), nullable=False)
+    # Denormalized from the owning task instance, whose dag/task/run never change after
+    # creation, so delete_old_records() can filter rtif_v2 directly instead of probing
+    # the task_instance history once per attempt (see #77237).
+    dag_id: Mapped[str] = mapped_column(StringID(), nullable=False)
+    task_id: Mapped[str] = mapped_column(StringID(), nullable=False)
+    run_id: Mapped[str] = mapped_column(StringID(), nullable=False)
     rendered_fields: Mapped[dict] = mapped_column(sa.JSON(), nullable=False)
     k8s_pod_yaml: Mapped[dict | None] = mapped_column(sa.JSON(), nullable=True)
     __table_args__ = (
@@ -154,6 +161,7 @@ class RenderedTaskInstanceFields(Base):
         ForeignKeyConstraint(
             ["task_instance_id"], ["task_instance.id"], name="rtif_v2_ti_fkey", ondelete="CASCADE"
         ),
+        Index("rtif_v2_dag_task_run", "dag_id", "task_id", "run_id"),
     )
     task_instance = relationship("TaskInstance", viewonly=True, lazy="raise")
 
@@ -168,6 +176,9 @@ class RenderedTaskInstanceFields(Base):
         cls,
         *,
         task_instance_id: UUID,
+        dag_id: str,
+        task_id: str,
+        run_id: str,
         rendered_fields: dict,
         k8s_pod_yaml: dict | None = None,
         session: Session = NEW_SESSION,
@@ -184,7 +195,14 @@ class RenderedTaskInstanceFields(Base):
                 get_dialect_name(session),
                 cls,
                 ["task_instance_id"],
-                {"id": uuid6.uuid7(), "task_instance_id": task_instance_id, **updated},
+                {
+                    "id": uuid6.uuid7(),
+                    "task_instance_id": task_instance_id,
+                    "dag_id": dag_id,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    **updated,
+                },
                 updated,
             )
         )
@@ -235,6 +253,9 @@ class RenderedTaskInstanceFields(Base):
 
     def __init__(self, ti: TaskInstance, render_templates=True, rendered_fields=None):
         self.task_instance_id = ti.id
+        self.dag_id = ti.dag_id
+        self.task_id = ti.task_id
+        self.run_id = ti.run_id
         self.ti = ti
         if render_templates:
             raise ValueError("render_templates=True is no longer supported")
@@ -286,6 +307,9 @@ class RenderedTaskInstanceFields(Base):
     def write(self, *, session: Session = NEW_SESSION) -> None:
         self.set_for_attempt(
             task_instance_id=self.task_instance_id,
+            dag_id=self.dag_id,
+            task_id=self.task_id,
+            run_id=self.run_id,
             rendered_fields=self.rendered_fields,
             k8s_pod_yaml=self.k8s_pod_yaml,
             session=session,
@@ -353,8 +377,6 @@ class RenderedTaskInstanceFields(Base):
         run_ids_to_keep: list[str] | ScalarSelect[str],
         session: Session,
     ) -> None:
-        from airflow.models.taskinstance import TaskInstance
-
         legacy = LegacyRenderedTaskInstanceFields.__table__
         session.execute(
             delete(legacy).where(
@@ -366,14 +388,9 @@ class RenderedTaskInstanceFields(Base):
         session.execute(
             delete(cls)
             .where(
-                select(1)
-                .where(
-                    TaskInstance.id == cls.task_instance_id,
-                    TaskInstance.dag_id == dag_id,
-                    TaskInstance.task_id == task_id,
-                    TaskInstance.run_id.not_in(run_ids_to_keep),
-                )
-                .exists()
+                cls.dag_id == dag_id,
+                cls.task_id == task_id,
+                cls.run_id.not_in(run_ids_to_keep),
             )
             .execution_options(synchronize_session="fetch")
         )

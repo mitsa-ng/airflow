@@ -1358,7 +1358,12 @@ class TestAttemptLiveness:
                     session=session,
                 )
                 RenderedTaskInstanceFields.set_for_attempt(
-                    task_instance_id=successor.id, rendered_fields={"field": "successor"}, session=session
+                    task_instance_id=successor.id,
+                    dag_id=successor.dag_id,
+                    task_id=successor.task_id,
+                    run_id=successor.run_id,
+                    rendered_fields={"field": "successor"},
+                    session=session,
                 )
                 session.commit()
             finally:

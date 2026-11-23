@@ -402,7 +402,12 @@ def test_replacement_refreshes_a_loaded_physical_row(
 
         def write(value):
             RenderedTaskInstanceFields.set_for_attempt(
-                task_instance_id=CURRENT_ID, rendered_fields=value, session=session
+                task_instance_id=CURRENT_ID,
+                dag_id=COORDINATES["dag_id"],
+                task_id=COORDINATES["task_id"],
+                run_id=COORDINATES["run_id"],
+                rendered_fields=value,
+                session=session,
             )
 
         def current():
@@ -441,6 +446,9 @@ def test_rendered_fields_v2_empty_values_shadow_legacy(ownership_session):
     session = ownership_session
     RenderedTaskInstanceFields.set_for_attempt(
         task_instance_id=CURRENT_ID,
+        dag_id=COORDINATES["dag_id"],
+        task_id=COORDINATES["task_id"],
+        run_id=COORDINATES["run_id"],
         rendered_fields={},
         k8s_pod_yaml=None,
         session=session,
@@ -454,6 +462,9 @@ def test_rendered_field_delete_prevents_legacy_fallback(ownership_session):
     session = ownership_session
     RenderedTaskInstanceFields.set_for_attempt(
         task_instance_id=CURRENT_ID,
+        dag_id=COORDINATES["dag_id"],
+        task_id=COORDINATES["task_id"],
+        run_id=COORDINATES["run_id"],
         rendered_fields={"v2": "data"},
         session=session,
     )
@@ -488,7 +499,12 @@ def test_load_legacy_rendered_fields_fills_only_attempts_without_a_joined_row(ow
 def test_load_legacy_rendered_fields_keeps_the_joined_v2_row(ownership_session):
     session = ownership_session
     RenderedTaskInstanceFields.set_for_attempt(
-        task_instance_id=CURRENT_ID, rendered_fields={"v2": "data"}, session=session
+        task_instance_id=CURRENT_ID,
+        dag_id=COORDINATES["dag_id"],
+        task_id=COORDINATES["task_id"],
+        run_id=COORDINATES["run_id"],
+        rendered_fields={"v2": "data"},
+        session=session,
     )
     ti = session.scalars(
         sa.select(TaskInstance)
@@ -546,6 +562,9 @@ def test_rendered_retention_deletes_both_stores_and_keeps_a_whole_mapped_run(own
     for attempt_id in (CURRENT_ID, *keep_ids):
         RenderedTaskInstanceFields.set_for_attempt(
             task_instance_id=attempt_id,
+            dag_id="ownership",
+            task_id="task",
+            run_id="manual" if attempt_id == CURRENT_ID else "next",
             rendered_fields={"field": "v2"},
             session=session,
         )
@@ -579,7 +598,12 @@ def test_rendered_retention_deletes_both_stores_and_keeps_a_whole_mapped_run(own
         session.execute(owner.insert().values(**coordinates, task_instance_id=attempt_id))
         session.execute(legacy.insert().values(**coordinates, rendered_fields={"field": "legacy"}))
         RenderedTaskInstanceFields.set_for_attempt(
-            task_instance_id=attempt_id, rendered_fields={"field": "other"}, session=session
+            task_instance_id=attempt_id,
+            dag_id=coordinates["dag_id"],
+            task_id=coordinates["task_id"],
+            run_id=coordinates["run_id"],
+            rendered_fields={"field": "other"},
+            session=session,
         )
 
     RenderedTaskInstanceFields.delete_old_records("task", "ownership", num_to_keep=1, session=session)

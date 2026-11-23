@@ -322,6 +322,64 @@ class TestRenderedTaskInstanceFields:
         ).all()
         assert set(run_ids) == {"run_6", "run_9"}
 
+    def test_write_populates_dag_task_run_coordinates(self, dag_maker, session):
+        """
+        Rows written through write() carry the owning attempt's dag_id, task_id
+        and run_id, which delete_old_records() relies on to filter rtif_v2 directly.
+        """
+        with dag_maker("test_rtif_coords", session=session) as dag:
+            task = BashOperator(task_id="coords_task", bash_command="echo {{ ds }}")
+        dr = dag_maker.create_dagrun(run_id="run_coords")
+        ti = dr.task_instances[0]
+        ti.task = task
+
+        RTIF(ti, render_templates=False).write(session=session)
+        session.flush()
+        session.expire_all()
+
+        stored = session.scalars(select(RTIF).where(RTIF.task_instance_id == ti.id)).one()
+        assert (stored.dag_id, stored.task_id, stored.run_id) == (dag.dag_id, task.task_id, dr.run_id)
+
+    def test_delete_old_records_scopes_to_the_task_own_rows(self, dag_maker, session):
+        """
+        The cleanup matches rows by rtif_v2's own coordinate columns: rows of another
+        task in the same dag are untouched, and so are rows of another dag that share
+        the same task_id and a deleted run_id.
+        """
+        with dag_maker("test_rtif_scope", session=session) as dag:
+            target = BashOperator(task_id="target", bash_command="echo {{ ds }}")
+            bystander = BashOperator(task_id="bystander", bash_command="echo {{ ds }}")
+        for num in range(3):
+            dr = dag_maker.create_dagrun(
+                run_id=f"run_{num}", logical_date=dag.start_date + timedelta(days=num)
+            )
+            for task in (target, bystander):
+                ti = next(t for t in dr.task_instances if t.task_id == task.task_id)
+                ti.task = task
+                session.add(RTIF(ti, render_templates=False))
+        with dag_maker("test_rtif_scope_other_dag", session=session) as other_dag:
+            same_named_task = BashOperator(task_id="target", bash_command="echo {{ ds }}")
+        dr = dag_maker.create_dagrun(run_id="run_0")
+        ti = dr.task_instances[0]
+        ti.task = same_named_task
+        session.add(RTIF(ti, render_templates=False))
+        session.flush()
+
+        # Keep the 2 most recent runs of test_rtif_scope: run_0 is past retention.
+        RTIF.delete_old_records(task_id=target.task_id, dag_id=dag.dag_id, num_to_keep=2, session=session)
+
+        remaining = [tuple(row) for row in session.execute(select(RTIF.dag_id, RTIF.task_id, RTIF.run_id))]
+        assert Counter(remaining) == Counter(
+            [
+                (dag.dag_id, "target", "run_1"),
+                (dag.dag_id, "target", "run_2"),
+                (dag.dag_id, "bystander", "run_0"),
+                (dag.dag_id, "bystander", "run_1"),
+                (dag.dag_id, "bystander", "run_2"),
+                (other_dag.dag_id, "target", "run_0"),
+            ]
+        )
+
     def test_write(self, dag_maker):
         """
         Test records can be written and overwritten
@@ -388,6 +446,9 @@ class TestRenderedTaskInstanceFields:
         session.execute(
             insert(RTIF).values(
                 task_instance_id=ti.id,
+                dag_id=ti.dag_id,
+                task_id=ti.task_id,
+                run_id=ti.run_id,
                 rendered_fields={"bash_command": "echo original"},
                 k8s_pod_yaml=None,
             )
